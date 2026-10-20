@@ -44,6 +44,8 @@ def complete(prompt, api_key, model):
         data = response.json()
     except ValueError:
         raise ValueError("OpenRouter returned invalid JSON. Try again later.") from None
+    if not isinstance(data, dict):
+        raise ValueError("OpenRouter returned an unexpected response. Try another model.")
     try:
         if data.get("error"):
             raise ValueError("OpenRouter returned a provider error. Try another model.")

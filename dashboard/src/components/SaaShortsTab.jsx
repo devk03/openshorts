@@ -32,10 +32,10 @@ function loadCache() {
   } catch { return null; }
 }
 
-function saveCache(url, analysis, webResearch, scripts, llm) {
+function saveCache(url, analysis, webResearch, scripts, llm, setup) {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({
-      url, analysis, webResearch, scripts, llm, timestamp: Date.now(),
+      url, analysis, webResearch, scripts, llm, setup, timestamp: Date.now(),
     }));
   } catch { /* localStorage full */ }
 }
@@ -59,11 +59,11 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   // Step 0: URL input
   const [url, setUrl] = useState(() => loadCache()?.url || '');
   const [videoMode, setVideoMode] = useState('lowcost'); // "lowcost" or "premium"
-  const [description, setDescription] = useState('');
-  const [style, setStyle] = useState('ugc');
-  const [language, setLanguage] = useState('en');
-  const [actorGender, setActorGender] = useState('female');
-  const [numScripts, setNumScripts] = useState(3);
+  const [description, setDescription] = useState(() => loadCache()?.setup?.description || '');
+  const [style, setStyle] = useState(() => loadCache()?.setup?.style || 'ugc');
+  const [language, setLanguage] = useState(() => loadCache()?.setup?.language || 'en');
+  const [actorGender, setActorGender] = useState(() => loadCache()?.setup?.actorGender || 'female');
+  const [numScripts, setNumScripts] = useState(() => loadCache()?.setup?.numScripts || 3);
   const [analyzing, setAnalyzing] = useState(false);
   const [analyzeError, setAnalyzeError] = useState('');
   const [fromCache, setFromCache] = useState(() => !!loadCache());
@@ -252,7 +252,8 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       setFromCache(false);
 
       // Cache results
-      saveCache(url.trim(), data.analysis, data.web_research, data.scripts, data.llm);
+      saveCache(url.trim(), data.analysis, data.web_research, data.scripts, data.llm,
+        { description, style, language, actorGender, numScripts });
 
       // Pre-fill actor description and narration from first script
       if (data.scripts.length > 0) {
@@ -631,10 +632,14 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
         {step === 1 && analysis && (
           <div className="animate-fade space-y-6">
             {generatedBy && (
-              <p className="text-xs text-muted break-words" role="status">
-                Scripts generated with {generatedBy.provider}{generatedBy.model ? ` · ${generatedBy.model}` : ''}.
-                {' '}Return to Setup to choose a different model and generate a new batch.
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-xs text-muted break-words" role="status">
+                  Scripts generated with {generatedBy.provider}{generatedBy.model ? ` · ${generatedBy.model}` : ''}.
+                </p>
+                <button className="btn-quiet min-h-10" onClick={() => { setStep(0); setFromCache(false); }}>
+                  Change model / new batch
+                </button>
+              </div>
             )}
             {/* Analysis Summary */}
             <div className="card p-6">

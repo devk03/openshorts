@@ -86,7 +86,7 @@ def test_provider_errors_are_actionable_and_do_not_echo_secrets(monkeypatch, sta
 
 
 @pytest.mark.parametrize("body", [
-    {"choices": []}, {"choices": [{"message": {"content": None}}]},
+    [], {"choices": []}, {"choices": [{"message": {"content": None}}]},
     {"error": {"message": "provider failed"}},
     {"choices": [{"message": {"content": "partial"}, "finish_reason": "length"}]},
 ])
