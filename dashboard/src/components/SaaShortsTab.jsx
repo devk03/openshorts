@@ -50,6 +50,21 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   const [llmModel, setLlmModel] = useState(() => localStorage.getItem('ugc_openrouter_model') || '');
   const [generatedBy, setGeneratedBy] = useState(() => loadCache()?.llm || null);
 
+  const [serverProviders, setServerProviders] = useState({});
+  const hasFalKey = Boolean(falKey || serverProviders.fal);
+  const hasElevenLabsKey = Boolean(elevenLabsKey || serverProviders.elevenlabs);
+  useEffect(() => {
+    let active = true;
+    fetch(getApiUrl('/api/config')).then(res => res.ok ? res.json() : {})
+      .then(config => {
+        if (!active) return;
+        const providers = config.ugcProviders || {};
+        setServerProviders(providers);
+        if (providers.model) setLlmModel(current => current || providers.model);
+      }).catch(() => {});
+    return () => { active = false; };
+  }, []);
+
   // Wizard state
   const [step, setStep] = useState(() => {
     const cache = loadCache();
@@ -127,11 +142,11 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
 
   // Fetch voices on mount
   useEffect(() => {
-    if (elevenLabsKey) {
+    if (hasElevenLabsKey) {
       fetchVoices();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [elevenLabsKey]);
+  }, [elevenLabsKey, hasElevenLabsKey]);
 
   // Reset selected voice when actor gender changes
   useEffect(() => {
@@ -278,11 +293,11 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   };
 
   const handleGenerate = async () => {
-    if (!falKey) {
+    if (!hasFalKey) {
       alert('fal.ai API key required. Set it in Settings.');
       return;
     }
-    if (!elevenLabsKey) {
+    if (!hasElevenLabsKey) {
       alert('ElevenLabs API key required. Set it in Settings.');
       return;
     }
@@ -489,7 +504,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                             if (key) sessionStorage.setItem('ugc_openrouter_key', key);
                             else sessionStorage.removeItem('ugc_openrouter_key');
                           }} placeholder="sk-or-…" />
-                        <p className="text-xs text-muted mt-1.5">Saved for this browser tab only. Leave blank to use a server-configured key.</p>
+                        <p className="text-xs text-muted mt-1.5">{serverProviders.openrouter ? 'OpenRouter key is configured on the server. An entered key overrides it for this tab.' : 'Saved for this browser tab only. Leave blank to use a server-configured key.'}</p>
                       </div>
                       <div>
                         <label htmlFor="ugc-openrouter-model" className="eyebrow block mb-2">Text model ID</label>
@@ -1078,7 +1093,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
 
                 <button
                   onClick={async () => {
-                    if (!falKey || !actorDescription) return;
+                    if (!hasFalKey || !actorDescription) return;
                     setGeneratingActors(true);
                     setActorOptions([]);
                     setSelectedActor(null);
@@ -1101,7 +1116,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                     } catch (e) { console.error(e); }
                     finally { setGeneratingActors(false); }
                   }}
-                  disabled={generatingActors || !falKey || !actorDescription}
+                  disabled={generatingActors || !hasFalKey || !actorDescription}
                   className="btn-ghost mt-2 w-full py-2.5 text-sm"
                 >
                   {generatingActors ? <><Loader2 size={14} className="animate-spin" /> Generating 3 actors...</> : <><User size={14} /> {actorOptions.length > 0 ? 'Regenerate actors' : 'Generate 3 new actors'} <span className="readout">~$0.06</span></>}
@@ -1185,10 +1200,10 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
               </div>
 
               {/* Missing keys warning */}
-              {(!falKey || !elevenLabsKey) && (
+              {(!hasFalKey || !hasElevenLabsKey) && (
                 <div className="p-3 bg-warn/10 rounded-input flex items-center gap-2 text-sm text-warn">
                   <AlertCircle size={14} />
-                  {!falKey && 'fal.ai API key missing. '}{!elevenLabsKey && 'ElevenLabs API key missing. '}
+                  {!hasFalKey && 'fal.ai API key missing. '}{!hasElevenLabsKey && 'ElevenLabs API key missing. '}
                   Set them in Settings.
                 </div>
               )}
@@ -1215,7 +1230,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
               </button>
               <button
                 onClick={handleGenerate}
-                disabled={!falKey || !elevenLabsKey || !selectedActor || generating}
+                disabled={!hasFalKey || !hasElevenLabsKey || !selectedActor || generating}
                 className="btn-primary px-6 py-2 text-sm"
               >
                 {generating ? (

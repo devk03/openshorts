@@ -1,5 +1,6 @@
 import os
 import llm_backend
+import ugc_credentials
 import re
 import sys
 import uuid
@@ -84,7 +85,7 @@ CHILD_ENV_DENYLIST = frozenset({
     "SMTP_USER", "SMTP_PASSWORD",
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
     "GOOGLE_CLIENT_SECRET",
-    "AGENTLEDGER_API_KEY", "OPENROUTER_API_KEY",
+    "AGENTLEDGER_API_KEY", "OPENROUTER_API_KEY", "FAL_API_KEY",
     "MANAGED_UPLOAD_POST_API_KEY", "MANAGED_GEMINI_API_KEY", "UPLOAD_POST_API_KEY",
     "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
@@ -2805,6 +2806,7 @@ async def get_config():
         # Self-host only: tells the dashboard the Gemini key is optional
         # because the moment picker runs on an OpenAI-compatible server.
         "localLlm": None if BILLING_ENABLED else llm_backend.describe(),
+        "ugcProviders": ugc_credentials.public_config(managed=BILLING_ENABLED),
     }
 
 async def _probe_youtube_quality(url: str) -> dict:
@@ -6740,7 +6742,7 @@ async def saasshorts_actor_options(
 ):
     """Generate multiple actor image options for the user to choose from."""
     await require_managed_entitlement(request)
-    fal_key = x_fal_key
+    fal_key = ugc_credentials.resolve_key("FAL_API_KEY", x_fal_key, managed=BILLING_ENABLED)
     if not fal_key:
         raise HTTPException(status_code=400, detail="Missing fal.ai API Key")
 
@@ -7145,8 +7147,8 @@ async def saasshorts_generate(
 ):
     """Generate a SaaS UGC video from a script. Returns a job_id for polling."""
     await require_managed_entitlement(request)
-    fal_key = x_fal_key
-    elevenlabs_key = x_elevenlabs_key
+    fal_key = ugc_credentials.resolve_key("FAL_API_KEY", x_fal_key, managed=BILLING_ENABLED)
+    elevenlabs_key = ugc_credentials.resolve_key("ELEVENLABS_API_KEY", x_elevenlabs_key, managed=BILLING_ENABLED)
 
     if not fal_key:
         raise HTTPException(status_code=400, detail="Missing fal.ai API Key (X-Fal-Key header)")
@@ -7327,6 +7329,7 @@ async def saasshorts_voices(
     x_elevenlabs_key: Optional[str] = Header(None, alias="X-ElevenLabs-Key"),
 ):
     """List available ElevenLabs voices."""
+    x_elevenlabs_key = ugc_credentials.resolve_key("ELEVENLABS_API_KEY", x_elevenlabs_key, managed=BILLING_ENABLED)
     if x_elevenlabs_key:
         try:
             loop = asyncio.get_event_loop()
