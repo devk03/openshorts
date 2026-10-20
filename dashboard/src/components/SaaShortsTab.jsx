@@ -16,7 +16,7 @@ const STYLE_OPTIONS = [
 
 const STEPS = ['Setup', 'Analysis', 'Configure', 'Generate', 'Result'];
 
-const CACHE_KEY = 'saasshorts_cache';
+const CACHE_KEY = 'saasshorts_cache_v2';
 const CACHE_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours
 
 function loadCache() {
@@ -32,10 +32,10 @@ function loadCache() {
   } catch { return null; }
 }
 
-function saveCache(url, analysis, webResearch, scripts) {
+function saveCache(url, analysis, webResearch, scripts, llm) {
   try {
     localStorage.setItem(CACHE_KEY, JSON.stringify({
-      url, analysis, webResearch, scripts, timestamp: Date.now(),
+      url, analysis, webResearch, scripts, llm, timestamp: Date.now(),
     }));
   } catch { /* localStorage full */ }
 }
@@ -45,6 +45,11 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
   // bearer token — no BYOK Gemini key needed. fal.ai + ElevenLabs stay BYOK.
   const geminiHeader = geminiApiKey ? { 'X-Gemini-Key': geminiApiKey } : {};
   const needsGeminiKey = !geminiApiKey && !managed;
+  const [llmProvider, setLlmProvider] = useState(() => managed ? 'gemini' : (loadCache()?.llm?.provider || 'openrouter'));
+  const [openRouterKey, setOpenRouterKey] = useState(() => sessionStorage.getItem('ugc_openrouter_key') || '');
+  const [llmModel, setLlmModel] = useState(() => localStorage.getItem('ugc_openrouter_model') || '');
+  const [generatedBy, setGeneratedBy] = useState(() => loadCache()?.llm || null);
+
   // Wizard state
   const [step, setStep] = useState(() => {
     const cache = loadCache();
@@ -200,11 +205,16 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
 
   const handleAnalyze = async () => {
     if (!url.trim() && !description.trim()) return;
-    if (needsGeminiKey) {
+    if (llmProvider === 'gemini' && needsGeminiKey) {
       setAnalyzeError('Gemini API key required. Set it in Settings.');
       return;
     }
 
+    if (llmProvider === 'openrouter' && !llmModel.trim()) {
+      setAnalyzeError('Enter an OpenRouter model ID (provider/model).');
+      return;
+    }
+    if (analyzing) return;
     setAnalyzing(true);
     setAnalyzeError('');
 
@@ -213,7 +223,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...geminiHeader,
+          ...(llmProvider === 'gemini' ? geminiHeader : (openRouterKey.trim() ? { 'X-OpenRouter-Key': openRouterKey.trim() } : {})),
         },
         body: JSON.stringify({
           url: url.trim() || undefined,
@@ -222,6 +232,8 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
           style,
           language,
           actor_gender: actorGender,
+          llm_provider: llmProvider,
+          llm_model: llmProvider === 'openrouter' ? llmModel.trim() : undefined,
         }),
       });
 
@@ -232,6 +244,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       }
 
       const data = await res.json();
+      setGeneratedBy(data.llm);
       setAnalysis(data.analysis);
       setWebResearch(data.web_research || null);
       setScripts(data.scripts);
@@ -239,7 +252,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
       setFromCache(false);
 
       // Cache results
-      saveCache(url.trim(), data.analysis, data.web_research, data.scripts);
+      saveCache(url.trim(), data.analysis, data.web_research, data.scripts, data.llm);
 
       // Pre-fill actor description and narration from first script
       if (data.scripts.length > 0) {
@@ -455,6 +468,46 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                 </div>
               </div>
 
+              {!managed && (
+                <fieldset disabled={analyzing} className="space-y-4">
+                  <legend className="eyebrow mb-3">Script provider</legend>
+                  <SegmentedControl
+                    options={[{ value: 'openrouter', label: 'OpenRouter' }, { value: 'gemini', label: 'Gemini' }]}
+                    value={llmProvider}
+                    onChange={setLlmProvider}
+                  />
+                  {llmProvider === 'openrouter' && (
+                    <>
+                      <div>
+                        <label htmlFor="ugc-openrouter-key" className="eyebrow block mb-2">OpenRouter API key</label>
+                        <input id="ugc-openrouter-key" type="password" autoComplete="off" spellCheck={false}
+                          className="input-field min-h-10" value={openRouterKey}
+                          onChange={(e) => {
+                            const key = e.target.value;
+                            setOpenRouterKey(key);
+                            if (key) sessionStorage.setItem('ugc_openrouter_key', key);
+                            else sessionStorage.removeItem('ugc_openrouter_key');
+                          }} placeholder="sk-or-…" />
+                        <p className="text-xs text-muted mt-1.5">Saved for this browser tab only. Leave blank to use a server-configured key.</p>
+                      </div>
+                      <div>
+                        <label htmlFor="ugc-openrouter-model" className="eyebrow block mb-2">Text model ID</label>
+                        <input id="ugc-openrouter-model" type="text" autoComplete="off" spellCheck={false}
+                          className="input-field min-h-10" value={llmModel}
+                          onChange={(e) => {
+                            setLlmModel(e.target.value);
+                            localStorage.setItem('ugc_openrouter_model', e.target.value);
+                          }} placeholder="provider/model-name" />
+                        <p className="text-xs text-muted mt-1.5">
+                          Copy a text model ID from <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer" className="underline">OpenRouter models</a>.
+                          {' '}This changes scripts and website analysis. Video and voice use the selections below.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </fieldset>
+              )}
+
               <div>
                 <label className="eyebrow block mb-2">Website URL <span className="opacity-60">(optional)</span></label>
                 <div className="flex gap-3">
@@ -470,7 +523,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                     />
                   </div>
                 </div>
-                <p className="text-xs lowercase text-muted mt-1.5">If provided, we&apos;ll scrape and research your site automatically</p>
+                <p className="text-xs lowercase text-muted mt-1.5">{llmProvider === 'openrouter' ? 'Uses your website content. No external web search.' : 'If provided, we scrape your site and research it with Google Search.'}</p>
               </div>
 
               <div>
@@ -545,12 +598,12 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
                 {analyzing ? (
                   <>
                     <Loader2 size={16} className="animate-spin" />
-                    {url.trim() ? 'Scraping + researching web + generating scripts... (45-90s)' : 'Generating scripts... (20-40s)'}
+                    {url.trim() ? (llmProvider === 'openrouter' ? 'Analyzing website and generating scripts…' : 'Researching and generating scripts…') : 'Generating scripts…'}
                   </>
                 ) : (
                   <>
                     <Sparkles size={16} className="hidden sm:block" />
-                    {url.trim() ? 'research & generate scripts' : 'generate scripts'}
+                    {url.trim() ? 'analyze & generate scripts' : 'generate scripts'}
                   </>
                 )}
               </button>
@@ -560,7 +613,7 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="card p-4">
                 <h3 className="eyebrow">Deep Research</h3>
-                <p className="text-xs text-muted mt-2">AI analyzes your product via URL scraping + web research, or generates directly from your description.</p>
+                <p className="text-xs text-muted mt-2">{llmProvider === 'openrouter' ? 'Analyze your website or describe your product with the text model you choose. No external web search.' : 'Analyze your website with Google Search research, or generate from a description.'}</p>
               </div>
               <div className="card p-4">
                 <h3 className="eyebrow">Pain Point Scripts</h3>
@@ -577,6 +630,12 @@ export default function SaaShortsTab({ geminiApiKey, elevenLabsKey, falKey, uplo
         {/* ── Step 1: Analysis Results ─────────────────────────── */}
         {step === 1 && analysis && (
           <div className="animate-fade space-y-6">
+            {generatedBy && (
+              <p className="text-xs text-muted break-words" role="status">
+                Scripts generated with {generatedBy.provider}{generatedBy.model ? ` · ${generatedBy.model}` : ''}.
+                {' '}Return to Setup to choose a different model and generate a new batch.
+              </p>
+            )}
             {/* Analysis Summary */}
             <div className="card p-6">
               <div className="flex items-center justify-between mb-4 gap-3">

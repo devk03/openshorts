@@ -20,7 +20,7 @@ import signal
 import socket
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Literal
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request, Header, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,7 +84,7 @@ CHILD_ENV_DENYLIST = frozenset({
     "SMTP_USER", "SMTP_PASSWORD",
     "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
     "GOOGLE_CLIENT_SECRET",
-    "AGENTLEDGER_API_KEY",
+    "AGENTLEDGER_API_KEY", "OPENROUTER_API_KEY",
     "MANAGED_UPLOAD_POST_API_KEY", "MANAGED_GEMINI_API_KEY", "UPLOAD_POST_API_KEY",
     "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY",
     "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
@@ -6600,6 +6600,8 @@ class SaaSAnalyzeRequest(BaseModel):
     style: str = "ugc"
     language: str = "en"
     actor_gender: str = "female"
+    llm_provider: Literal["gemini", "openrouter"] = "gemini"
+    llm_model: Optional[str] = None
 
 
 @app.post("/api/saasshorts/analyze")
@@ -6608,12 +6610,29 @@ async def saasshorts_analyze(
     request: Request,
 ):
     """Analyze a URL or manual description and generate video scripts."""
-    gemini_key = await resolve_gemini(request)
-    if not gemini_key:
-        raise gemini_missing_error()
+    gemini_key = None
+    openrouter_key = None
+    llm_model = None
+    if req.llm_provider == "openrouter":
+        if BILLING_ENABLED:
+            raise HTTPException(status_code=400, detail="OpenRouter is available in self-host mode only")
+        openrouter_key = (request.headers.get("X-OpenRouter-Key") or os.environ.get("OPENROUTER_API_KEY") or "").strip()
+        llm_model = (req.llm_model or os.environ.get("OPENROUTER_MODEL") or "").strip()
+        if not openrouter_key:
+            raise HTTPException(status_code=400, detail="OpenRouter API key required")
+        if not llm_model or len(llm_model) > 200 or any(c.isspace() for c in llm_model):
+            raise HTTPException(status_code=400, detail="Enter a valid OpenRouter model ID (provider/model)")
+    else:
+        gemini_key = await resolve_gemini(request)
+        if not gemini_key:
+            raise gemini_missing_error()
+    llm_options = dict(llm_provider=req.llm_provider, openrouter_key=openrouter_key, llm_model=llm_model)
 
     if not req.url and not req.description:
         raise HTTPException(status_code=400, detail="Provide a URL or a product description")
+
+    if not 1 <= req.num_scripts <= 5:
+        raise HTTPException(status_code=400, detail="Request between one and five scripts")
 
     # Meter the managed Gemini research/analysis (no-op for self-host).
     saas_minutes = _cloud_config.MANAGED_ANALYSIS_MINUTES if BILLING_ENABLED else 0
@@ -6628,8 +6647,12 @@ async def saasshorts_analyze(
             if req.url and req.url.strip():
                 # URL provided: full scrape + research pipeline
                 scraped = scrape_website(req.url)
-                web_research = research_saas_online(req.url, gemini_key)
-                analysis = analyze_saas(scraped, gemini_key, web_research=web_research)
+                if req.llm_provider == "gemini":
+                    web_research = research_saas_online(req.url, gemini_key)
+                # OpenRouter uses the supplied website, without Google Search grounding.
+                analysis = analyze_saas(scraped, gemini_key, web_research=web_research, **llm_options)
+                if req.description:
+                    analysis["extra_context"] = req.description
             else:
                 # Manual description: build analysis from description
                 analysis = {
@@ -6642,11 +6665,12 @@ async def saasshorts_analyze(
                     "tone": "casual and authentic",
                 }
 
-            scripts = generate_scripts(analysis, gemini_key, req.num_scripts, req.style, req.language, req.actor_gender)
+            scripts = generate_scripts(analysis, gemini_key, req.num_scripts, req.style, req.language, req.actor_gender, **llm_options)
             return {
                 "analysis": analysis,
                 "scripts": scripts,
                 "web_research": web_research,
+                "llm": {"provider": req.llm_provider, "model": llm_model if req.llm_provider == "openrouter" else None},
             }
 
         result = await loop.run_in_executor(None, run_analysis)
@@ -6654,6 +6678,10 @@ async def saasshorts_analyze(
             await _metering.commit_reservation(reservation_id)
         return result
 
+    except ValueError as e:
+        if reservation_id:
+            await _metering.release_reservation(reservation_id)
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         if reservation_id:
             await _metering.release_reservation(reservation_id)
